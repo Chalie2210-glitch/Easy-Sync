@@ -46,8 +46,6 @@ class Settings:
     auto_group: bool = False
     #: 자동으로 묶였을 때 붙는 컨테이너 타입(임포트 토큰).
     default_container: str = "Random Container"
-    #: 기본으로 이벤트를 만들지 여부.
-    default_make_event: bool = False
     #: createNew / useExisting / replaceExisting
     import_operation: str = "useExisting"
     #: 보이스로 임포트할지 여부.

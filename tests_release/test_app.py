@@ -1,3 +1,4 @@
+import json
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import tempfile
@@ -9,6 +10,7 @@ from unittest.mock import patch
 from PySide6.QtWidgets import QApplication
 from easysync import addon, settings, updates
 from easysync.link import WwiseLink
+from easysync.options_dialog import OptionsDialog
 from easysync.ui import MainWindow
 from easysync.update_dialog import UpdateDialog
 
@@ -16,6 +18,38 @@ APP = QApplication.instance() or QApplication([])
 
 
 class AppTests(unittest.TestCase):
+    def test_auto_event_requires_opt_in_after_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'settings.json'
+            path.write_text(json.dumps({'default_make_event': True,
+                                        'pins': ['example'], 'defaults_version': 1}))
+            with patch.object(settings, 'APP_DIR', Path(tmp)), patch.object(settings, 'SETTINGS_PATH', path):
+                window = MainWindow(WwiseLink(), settings.Settings.load(), [])
+                try:
+                    self.assertFalse(window.auto_event_check.isChecked())
+                    first = Path(tmp) / 'Example_01.wav'
+                    second = Path(tmp) / 'Example_02.wav'
+                    window._rebuild_groups([first])
+                    self.assertFalse(window.groups[0].make_event)
+                    window.auto_event_check.setChecked(True)
+                    window._rebuild_groups([first, second])
+                    self.assertTrue(all(g.make_event for g in window.groups))
+                    options = OptionsDialog(window.settings, window)
+                    options._save()
+                    self.assertTrue(window.auto_event_check.isChecked())
+                finally:
+                    window.close()
+                saved = json.loads(path.read_text(encoding='utf-8'))
+                self.assertNotIn('default_make_event', saved)
+                self.assertEqual(saved['pins'], ['example'])
+                reopened = MainWindow(WwiseLink(), settings.Settings.load(), [])
+                try:
+                    self.assertFalse(reopened.auto_event_check.isChecked())
+                    reopened._rebuild_groups([first, second])
+                    self.assertFalse(any(g.make_event for g in reopened.groups))
+                finally:
+                    reopened.close()
+
     def test_settings_survive_reload_and_future_keys(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'settings.json'

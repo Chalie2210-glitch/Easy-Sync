@@ -576,7 +576,6 @@ class MainWindow(QMainWindow):
             # 다시 묶는다 — 신호가 도로 돌지 않게 잠깐 막는다.
             for widget, value in (
                 (self.auto_group_check, self.settings.auto_group),
-                (self.auto_event_check, self.settings.default_make_event),
                 (self.smart_wav_check,
                  self.settings.originals_mode != options_dialog.MODE_MANUAL),
             ):
@@ -853,6 +852,7 @@ class MainWindow(QMainWindow):
             "묶음과 낱개마다 이벤트를 만듭니다.\n"
             "켜면 지금 목록 전부의 이벤트 칸이 켜지고, 뒤에 가져오는\n"
             "파일도 켜진 채로 들어옵니다.\n\n"
+            "이 선택은 저장하지 않습니다. 프로그램을 열 때마다 직접 켜 주세요.\n"
             "이벤트를 만들 위치는 왼쪽 '이벤트를 만들 위치' 에서 고릅니다.")
         self.auto_event_check.stateChanged.connect(self._auto_event_toggled)
         row.addWidget(self.auto_event_check)
@@ -981,7 +981,7 @@ class MainWindow(QMainWindow):
         """
         s = self.settings
         self.auto_group_check.setChecked(s.auto_group)
-        self.auto_event_check.setChecked(s.default_make_event)
+        self.auto_event_check.setChecked(False)
         self.suggest_check.setChecked(s.suggest_paths)
         self.smart_wav_check.setChecked(
             s.originals_mode != options_dialog.MODE_MANUAL)
@@ -994,7 +994,6 @@ class MainWindow(QMainWindow):
     def _persist(self) -> None:
         s = self.settings
         s.auto_group = self.auto_group_check.isChecked()
-        s.default_make_event = self.auto_event_check.isChecked()
         s.suggest_paths = self.suggest_check.isChecked()
         s.last_event_root = self.event_root
         s.last_destination = self.destination
@@ -1152,7 +1151,6 @@ class MainWindow(QMainWindow):
         된다. 이미 있는 줄까지 맞춰 주는 쪽이 기대에 맞다.
         """
         on = state == Qt.CheckState.Checked.value
-        self.settings.default_make_event = on
         for group in self.groups:
             group.make_event = on
         self._fill_group_tree()
@@ -1223,7 +1221,7 @@ class MainWindow(QMainWindow):
         self.groups = plan_mod.group_files(
             paths, container=self.settings.default_container,
             auto=self.settings.auto_group)
-        if self.settings.default_make_event:
+        if self.auto_event_check.isChecked():
             for group in self.groups:
                 group.make_event = True
         for group in self.groups:
@@ -1603,7 +1601,7 @@ class MainWindow(QMainWindow):
         merged = plan_mod.Group(
             key=key, files=files,
             container=self.settings.default_container or "Random Container",
-            make_event=self.settings.default_make_event)
+            make_event=self.auto_event_check.isChecked())
         first = min(self.groups.index(g) for g in groups)
         self.groups = [g for g in self.groups if g not in groups]
         self.groups.insert(first, merged)
@@ -1653,7 +1651,7 @@ class MainWindow(QMainWindow):
         key = self._unique_key(key)
         self.groups.append(plan_mod.Group(
             key=key, files=moved, container=self.settings.default_container,
-            make_event=self.settings.default_make_event))
+            make_event=self.auto_event_check.isChecked()))
         self.groups = [g for g in self.groups if g.files]
         self._fill_group_tree()
         self._rebuild_plan()

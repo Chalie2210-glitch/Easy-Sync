@@ -164,10 +164,6 @@ class OptionsDialog(QDialog):
             "파일을 새로 가져왔을 때 묶음에 기본으로 붙는 컨테이너 종류입니다.")
         layout.addWidget(self.container_box, 1)
 
-        self.default_event = QCheckBox("이벤트 자동 체크")
-        self.default_event.setToolTip(
-            "새 묶음의 '이벤트' 칸을 기본으로 켜 둡니다.")
-        layout.addWidget(self.default_event)
         return box
 
     # -- 동작 --------------------------------------------------------------
@@ -197,7 +193,6 @@ class OptionsDialog(QDialog):
         index = self.container_box.findData(s.default_container)
         if index >= 0:
             self.container_box.setCurrentIndex(index)
-        self.default_event.setChecked(s.default_make_event)
         self.auto_group.setChecked(s.auto_group)
 
     def _save(self) -> None:
@@ -209,7 +204,6 @@ class OptionsDialog(QDialog):
         s.import_operation = self.op_box.currentData()
         s.is_voice = self.voice_check.isChecked()
         s.default_container = self.container_box.currentData()
-        s.default_make_event = self.default_event.isChecked()
         s.auto_group = self.auto_group.isChecked()
         s.save()
         self.accept()
