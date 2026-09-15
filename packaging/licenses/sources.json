@@ -1,0 +1,23 @@
+[
+  {
+    "project": "qtbase",
+    "version": "6.11.1",
+    "source": "https://codeload.github.com/qt/qtbase/tar.gz/refs/tags/v6.11.1",
+    "sha256": "e20852bd45cdef5da5175f3634e285e03e2be7ca437f3d2b7e1a2af7321bca7a",
+    "notice_files": 163
+  },
+  {
+    "project": "qtsvg",
+    "version": "6.11.1",
+    "source": "https://codeload.github.com/qt/qtsvg/tar.gz/refs/tags/v6.11.1",
+    "sha256": "06d7cefd2776a072b6906aaf9529a3a17eb51a254fba0cb52f5a35d97c342569",
+    "notice_files": 11
+  },
+  {
+    "project": "pyside-setup",
+    "version": "6.11.1",
+    "source": "https://codeload.github.com/pyside/pyside-setup/tar.gz/refs/tags/v6.11.1",
+    "sha256": "b5b849bb6e9c2f56ddf0cac20a1254103c5d697d8bdbc73380ba6f67b70b7fd2",
+    "notice_files": 25
+  }
+]

@@ -1,0 +1,5 @@
+"""Public release identity. Keep installer AppId stable across versions."""
+VERSION = "0.1.0"
+REPOSITORY = "Chalie2210-glitch/Easy-Sync"
+RELEASES_URL = f"https://github.com/{REPOSITORY}/releases"
+APP_MUTEX = "EasySync.Desktop.v1"

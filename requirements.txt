@@ -1,0 +1,13 @@
+PySide6==6.11.1
+PySide6_Addons==6.11.1
+PySide6_Essentials==6.11.1
+shiboken6==6.11.1
+waapi-client==0.8.1
+autobahn==24.4.2
+cffi==2.1.1
+cryptography==50.0.1
+hyperlink==21.0.0
+idna==3.19
+pycparser==3.0
+txaio==26.6.1
+setuptools==84.0.0
