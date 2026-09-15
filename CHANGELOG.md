@@ -1,3 +1,9 @@
+# Unreleased
+
+- Automatic events require explicit opt-in on each launch; the setting is no longer saved.
+- Public source tree excludes tests and unused upstream example/test notices.
+- Added a Korean guide for everyday import, audio replacement and event creation.
+
 # 0.1.0
 
 First public MIT release of Easy Sync for Windows x64.

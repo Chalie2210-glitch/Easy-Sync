@@ -4,7 +4,6 @@
 !/.github/
 !/easysync/
 !/packaging/
-!/tests_release/
 !/run_easysync.pyw
 !/install_addon.py
 !/requirements.txt
@@ -31,3 +30,8 @@ __pycache__/
 *.pem
 *.key
 *.pfx
+/packaging/verify_installer.py
+/packaging/licenses/**/examples/
+/packaging/licenses/**/tests/
+/packaging/licenses/**/testlib/
+/packaging/licenses/**/testinternal/

@@ -7,6 +7,11 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
 out = root / "build" / "ThirdPartyLicenses"
+# This generated directory must not retain notices removed from the source tree.
+if out.exists():
+    if out.is_symlink() or out.resolve().parent != (root / 'build').resolve():
+        raise RuntimeError('Unexpected license output location')
+    shutil.rmtree(out)
 out.mkdir(parents=True, exist_ok=True)
 versions = {}
 for dist in metadata.distributions():
