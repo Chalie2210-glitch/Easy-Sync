@@ -110,6 +110,7 @@ class HierarchyPanel(QWidget):
     chosen = Signal(str)          # 고른 오브젝트의 경로
     failed = Signal(object)       # 예외 객체
     pins_changed = Signal()
+    pin_unavailable = Signal(str)
 
     def __init__(self, tasks: TaskRunner, allowed_types: frozenset[str],
                  hint: str, parent: QWidget | None = None) -> None:
@@ -208,12 +209,25 @@ class HierarchyPanel(QWidget):
             return          # 아직 Wwise 에 붙지 않았다
         pin = self.pin_box.currentData() or ""
         base = pin or self.root
+        root = self.root
         bridge = self.bridge
         def fetch():
-            return bridge.children_of(base), bridge.object_at(base) if pin else None
+            root_row = bridge.object_at(pin) if pin else None
+            missing = bool(pin and root_row is None)
+            actual_base = root if missing else base
+            return bridge.children_of(actual_base), root_row, actual_base, missing
+        def done(result):
+            rows, root_row, actual_base, missing = result
+            if missing:
+                self.set_pins(self.pins)
+                self._pending_path = ""
+                self.pin_unavailable.emit(pin)
+            self._fill_top(rows, actual_base, root_row)
+            if missing:
+                self.hint.setText("핀 경로가 없어 전체 보기로 전환했습니다. 현재 위치를 다시 선택하세요.")
         self.tasks.run(fetch,
                        on_done=lambda result: self._if_current(
-                           revision, self._fill_top, result[0], base, result[1]),
+                           revision, done, result),
                        on_fail=lambda exc: self._if_current(revision, self.failed.emit, exc))
 
     def _if_current(self, revision, callback, *args):
@@ -473,6 +487,10 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self.audio_panel.pins_changed.connect(self._save_project_pins)
         self.event_panel.pins_changed.connect(self._save_project_pins)
+        self.audio_panel.pin_unavailable.connect(
+            lambda path: self._on_pin_unavailable(self.audio_panel, path))
+        self.event_panel.pin_unavailable.connect(
+            lambda path: self._on_pin_unavailable(self.event_panel, path))
 
         # 타이머를 설정 복원보다 먼저 만든다. 복원이 체크박스를 건드리면
         # stateChanged 가 곧바로 _queue_replan 을 부르기 때문이다.
@@ -1042,6 +1060,20 @@ class MainWindow(QMainWindow):
         # 트리 내용은 여기서 읽지 않는다. Wwise 에 붙은 뒤
         # _on_wwise_connected 가 지난번 위치까지 펼쳐 준다.
         self._update_paths()
+
+    def _on_pin_unavailable(self, panel: HierarchyPanel, path: str) -> None:
+        if panel is self.audio_panel:
+            self._destination_revision += 1
+            self._destination_timer.stop()
+            self._destination_loading = False
+            self.destination = self.settings.last_destination = ""
+            self._existing_cache = frozenset()
+            self._dest_segments = []
+        else:
+            self.event_root = self.settings.last_event_root = ""
+        self._update_paths()
+        self._rebuild_plan()
+        self.status.setText(f"핀 경로를 찾을 수 없어 전체 보기로 전환했습니다: {path}")
 
     def _save_project_pins(self) -> None:
         if self._pin_project_key is not None and self.settings.store_project_pins(

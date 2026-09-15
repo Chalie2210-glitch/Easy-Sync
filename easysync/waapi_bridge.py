@@ -32,6 +32,13 @@ log = logging.getLogger(__name__)
 TREE_FIELDS = ["id", "name", "type", "path", "childrenCount", "@RandomOrSequence"]
 
 
+def _path_query(path: str) -> str:
+    # A filter returns no rows for a missing path. A direct from.path lookup
+    # produces an error in Wwise's log even if the client catches the exception.
+    safe = path.replace('"', '\\"')
+    return f'$ where path = "{safe}"'
+
+
 class WwiseUnavailable(Exception):
     """Wwise Authoring 에 닿지 못했을 때."""
 
@@ -150,23 +157,26 @@ class WwiseBridge:
         수만 개 오브젝트가 될 수 있다. 펼칠 때마다 한 단계씩 읽으면 창이
         즉시 뜨고, 사용자가 실제로 보는 부분만 비용을 낸다.
         """
+        args = ({"waql": _path_query(parent) + " select children"}
+                if parent.startswith(SEP) else {
+                    "from": {"id": [parent]},
+                    "transform": [{"select": ["children"]}],
+                })
         result = self._call("ak.wwise.core.object.get", {
-            "from": {"path" if parent.startswith(SEP) else "id": [parent]},
-            "transform": [{"select": ["children"]}],
-            "options": {"return": TREE_FIELDS},
-        })
+            **args, "options": {"return": TREE_FIELDS}})
         return result.get("return", [])
 
     def object_at(self, path_or_id: str) -> dict | None:
         """오브젝트 하나를 가져온다. 없으면 None.
 
-        "없음" 은 오류가 아니라 정상적인 대답이다. WAAPI 는 없는 경로에
-        ``from path cannot be resolved`` 로 응답하므로 여기서 None 으로 바꾼다.
+        경로는 필터로 조회해 없는 경로도 Wwise 오류 로그를 남기지 않는다.
         """
         key = "path" if path_or_id.startswith(SEP) else "id"
+        source = ({"waql": _path_query(path_or_id)} if key == "path"
+                  else {"from": {"id": [path_or_id]}})
         try:
             result = self._call("ak.wwise.core.object.get", {
-                "from": {key: [path_or_id]},
+                **source,
                 "options": {"return": TREE_FIELDS},
             })
         except WaapiError as exc:
