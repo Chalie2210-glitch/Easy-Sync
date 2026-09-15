@@ -14,17 +14,18 @@
   * 프로젝트가 바뀌면 — 다른 프로젝트임을 알아채고 다시 붙은 것으로
     취급한다(경로가 전부 달라지므로 트리를 새로 읽어야 한다).
 
-살아 있는지는 주기적으로 가볍게 물어서 확인한다. HTTP 로 붙었을 때 호출
-작업이 없는 동안 15초마다 확인하며, 연속 두 번 실패해야 재연결한다.
+살아 있는지는 기본 15초마다 확인하며, 임포트 중에는 확인을 미룬다.
+연속 두 번 실패하거나 상태 확인이 시간 제한을 넘기면 재연결한다.
 """
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from .tasks import TaskRunner
+from .tasks import ConnectionTasks
 from .waapi_bridge import ProjectInfo, WwiseBridge
 
 log = logging.getLogger(__name__)
@@ -66,7 +67,11 @@ class WwiseLink(QObject):
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._url = url
-        self._tasks = TaskRunner()
+        self._tasks = ConnectionTasks(self)
+        # waapi-client's WAMP constructor can wait without a timeout. Never queue
+        # more WAMP attempts behind it; independent HTTP probes must still run.
+        self._fallback_lock = threading.Lock()
+        self._last_project_check = 0.0
         self.bridge: WwiseBridge | None = None
         self.project: ProjectInfo | None = None
         self._failures = 0
@@ -112,18 +117,18 @@ class WwiseLink(QObject):
         if self.bridge is not None and _looks_like_disconnect(exc):
             self._timer.start(int(RETRY_SECONDS * 1000))
 
+    def check_now(self) -> None:
+        """Manual refresh also wakes disconnected or overdue connection checks."""
+        if self._suspended:
+            return
+        self._last_project_check = 0.0
+        self._timer.start(int(RETRY_SECONDS * 1000))
+        self._tick()
+
     # -- 내부 --------------------------------------------------------------
     def _tick(self) -> None:
         if self._suspended:
             return
-        if self.bridge is not None:
-            if self._busy or getattr(self.bridge, "busy", False):
-                return
-            if (not self._failures
-                    and self._timer.interval() != int(RETRY_SECONDS * 1000)
-                    and time.monotonic() - getattr(self.bridge, "last_activity", 0.0)
-                    < HEARTBEAT_SECONDS):
-                return
         if self._busy:
             # 매달린 시도를 언제까지고 기다리지 않는다. 버려진 시도는
             # 스레드에 남겨 두고(데몬이라 프로세스와 함께 사라진다) 새로
@@ -132,10 +137,21 @@ class WwiseLink(QObject):
                 return
             log.warning("연결 시도가 %.0f초 넘게 응답이 없어 다시 시도합니다.",
                         ATTEMPT_TIMEOUT)
+            if self.bridge is not None:
+                self._drop("Wwise 상태 확인이 멈춰 연결을 다시 찾습니다.")
+                return
             # 버린 시도가 나중에 끝나도 상태를 건드리지 못하게 한다.
             self._generation += 1
+        if self.bridge is not None:
+            if getattr(self.bridge, "busy", False):
+                return
+            if (not self._failures
+                    and self._timer.interval() != int(RETRY_SECONDS * 1000)
+                    and time.monotonic() - self._last_project_check < HEARTBEAT_SECONDS):
+                return
         self._busy = True
         self._busy_since = time.monotonic()
+        self._timer.start(int(RETRY_SECONDS * 1000))
         gen = self._generation
         if self.bridge is None:
             self._tasks.run(
@@ -158,20 +174,24 @@ class WwiseLink(QObject):
         # 번이 몇 초가 되어 폴링이 폴링이 아니게 된다. 가끔만 WAMP 도 본다 —
         # HTTP 포트를 꺼 둔 환경에서도 결국 붙게.
         allow_wamp = self._attempts == 1 or self._attempts % WAMP_EVERY == 0
-        bridge = WwiseBridge(self._url, allow_wamp=allow_wamp)
+        owns_fallback = (bool(self._url) or allow_wamp) and self._fallback_lock.acquire(False)
+        if self._url and not owns_fallback:
+            raise NotReady("이전 WAMP 연결 시도가 끝나기를 기다리는 중입니다.")
         try:
-            project = bridge.project_info()
-        except Exception:
-            bridge.close()
-            raise
-        # WAAPI 는 Wwise 가 아직 프로젝트를 여는 중에도 대답한다. 그때 받은
-        # ProjectInfo 는 이름도 루트도 비어 있어서, 그대로 붙었다고 하면
-        # 트리가 텅 빈 채로 "연결됨" 이 된다. 프로젝트가 실제로 열릴 때까지
-        # 계속 두드린다.
-        if not project.name or not project.roots.containers_default_wu:
-            bridge.close()
-            raise NotReady("Wwise 가 아직 프로젝트를 여는 중입니다.")
-        return bridge, project
+            bridge = WwiseBridge(self._url, allow_wamp=bool(owns_fallback))
+            try:
+                project = bridge.project_info()
+            except Exception:
+                bridge.close()
+                raise
+            # WAAPI also responds while a project is still opening.
+            if not project.name or not project.roots.containers_default_wu:
+                bridge.close()
+                raise NotReady("Wwise 가 아직 프로젝트를 여는 중입니다.")
+            return bridge, project
+        finally:
+            if owns_fallback:
+                self._fallback_lock.release()
 
     def _heartbeat(self) -> ProjectInfo | None:
         """살아 있는지 + 같은 프로젝트인지 확인한다."""
@@ -186,10 +206,11 @@ class WwiseLink(QObject):
             # 버린 시도가 뒤늦게 성공했다. 그 브리지를 그대로 두면 소켓이
             # 새고, self.bridge 를 덮어쓰면 connected 가 두 번 나간다.
             log.debug("버린 연결 시도가 뒤늦게 성공해 닫습니다.")
-            bridge.close()
+            self._tasks.run(bridge.close)
             return
         self._busy = False
         self._failures = 0
+        self._last_project_check = time.monotonic()
         self.bridge, self.project = bridge, project
         log.info("Wwise 연결됨: %s (%s)", project.name, bridge.transport_name)
         self.connected.emit(project)
@@ -213,6 +234,7 @@ class WwiseLink(QObject):
         if project is None or self.bridge is None:
             return
         self._failures = 0
+        self._last_project_check = time.monotonic()
         self._timer.start(int(HEARTBEAT_SECONDS * 1000))
         if not project.name or not project.roots.containers_default_wu:
             self._drop("Wwise 프로젝트를 전환하는 중입니다.")
@@ -239,6 +261,8 @@ class WwiseLink(QObject):
                 self._timer.start(int(RETRY_SECONDS * 1000))
         else:
             log.debug("하트비트 실패(연결은 유지): %s", exc)
+            self._last_project_check = time.monotonic()
+            self._timer.start(int(HEARTBEAT_SECONDS * 1000))
 
     def _drop(self, reason: str) -> None:
         log.info("연결 해제: %s", reason)

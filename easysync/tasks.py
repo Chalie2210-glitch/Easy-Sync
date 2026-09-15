@@ -6,10 +6,43 @@
 from __future__ import annotations
 
 import logging
+import threading
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
 
 log = logging.getLogger(__name__)
+
+
+class ConnectionTasks(QObject):
+    """Connection recovery must run even when ordinary WAAPI jobs are stuck.
+
+    Daemon threads do not occupy Qt's shared pool or hold application shutdown.
+    Completion is explicitly delivered on this object's GUI thread.
+    """
+    completed = Signal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.completed.connect(self._deliver, Qt.ConnectionType.QueuedConnection)
+
+    @Slot(object)
+    def _deliver(self, result):
+        callback, payload = result
+        if callback is not None:
+            callback(payload)
+
+    def run(self, fn, *args, on_done=None, on_fail=None, **kwargs):
+        def work():
+            try:
+                result = (on_done, fn(*args, **kwargs))
+            except Exception as exc:
+                log.debug("연결 작업 실패: %s", exc, exc_info=True)
+                result = (on_fail, exc)
+            try:
+                self.completed.emit(result)
+            except RuntimeError:
+                pass  # The application has already closed.
+        threading.Thread(target=work, name='EasySync-connection', daemon=True).start()
 
 
 class TaskSignals(QObject):

@@ -1,5 +1,7 @@
 # Unreleased
 
+- Recover when Wwise closes and another project opens, even with stalled background work.
+- Clear the previous project's destinations, active pins, event checks and switch assignments on project change.
 - Automatic events require explicit opt-in on each launch; the setting is no longer saved.
 - Public source tree excludes tests and unused upstream example/test notices.
 - Added a Korean guide for everyday import, audio replacement and event creation.

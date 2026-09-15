@@ -434,6 +434,7 @@ class MainWindow(QMainWindow):
         self._dest_segments: list[tuple[str, str]] = []
         self._suggestion: str | None = None
         self._adopted_selection = False
+        self._last_project_path = None
         self._destination_revision = 0
         self._destination_loading = False
         self._importing = False
@@ -654,6 +655,25 @@ class MainWindow(QMainWindow):
 
     def _on_wwise_connected(self, project: ProjectInfo) -> None:
         """Wwise 에 붙었다(또는 프로젝트가 바뀌었다). 화면을 거기에 맞춘다."""
+        changed_project = (self._last_project_path is not None
+                           and self._last_project_path != project.path)
+        self._last_project_path = project.path
+        if changed_project:
+            self.settings.last_destination = ""
+            self.settings.last_event_root = ""
+            self._adopted_selection = False
+            self.auto_event_check.setChecked(False)
+            for group in self.groups:
+                group.make_event = False
+                group.switch_levels.clear()
+                for source in group.files:
+                    source.switches.clear()
+            for panel in (self.audio_panel, self.event_panel):
+                panel.pin_box.blockSignals(True)
+                panel.pin_box.setCurrentIndex(0)
+                panel.pin_box.blockSignals(False)
+            self._fill_group_tree()
+        self._switch_lookup = {}
         self._destination_revision += 1
         self._destination_timer.stop()
         self._destination_loading = False
@@ -664,7 +684,8 @@ class MainWindow(QMainWindow):
         # 슬롯이라 여기서 직접 부르면 Wwise 가 바쁠 때 창이 통째로 멎는다.
         if bridge is not None:
             self.tasks.run(bridge.install_dir,
-                           on_done=icons.configure,
+                           on_done=lambda folder: icons.configure(folder)
+                           if self.project is project else None,
                            on_fail=lambda exc: log.debug("아이콘 경로 실패: %s", exc))
 
         self.setWindowTitle(f"Easy Sync  [{project.name}]")
@@ -728,8 +749,10 @@ class MainWindow(QMainWindow):
         bridge = self.link.bridge
         if bridge is None:
             return
+        revision = self._destination_revision
         self.tasks.run(bridge.selected_paths,
-                       on_done=self._on_selection_fetched,
+                       on_done=lambda picked: self._on_selection_fetched(picked)
+                       if revision == self._destination_revision else None,
                        on_fail=lambda exc: log.debug("선택 조회 실패: %s", exc))
 
     def _on_selection_fetched(self, picked: list[tuple[str, str]]) -> None:
@@ -1010,7 +1033,11 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _reload_all(self) -> None:
-        if self._require_wwise() is None:
+        if self._importing:
+            self.status.setText("임포트가 완료된 후 다시 읽을 수 있습니다.")
+            return
+        self.link.check_now()
+        if self.link.bridge is None:
             return
         self.audio_panel.reload(self.destination)
         self.event_panel.reload(self.event_root)
@@ -1755,9 +1782,11 @@ class MainWindow(QMainWindow):
         bridge = self.link.bridge
         if bridge is None:
             return
+        project = self.project
         self.tasks.run(
             bridge.switch_groups,
-            on_done=self._on_switch_groups,
+            on_done=lambda rows: self._on_switch_groups(rows)
+            if self.project is project else None,
             on_fail=lambda msg: log.warning("스위치 조회 실패: %s", msg))
 
     def _on_switch_groups(self, rows: list[dict]) -> None:
