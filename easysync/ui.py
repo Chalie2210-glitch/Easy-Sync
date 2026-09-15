@@ -109,6 +109,7 @@ class HierarchyPanel(QWidget):
 
     chosen = Signal(str)          # 고른 오브젝트의 경로
     failed = Signal(object)       # 예외 객체
+    pins_changed = Signal()
 
     def __init__(self, tasks: TaskRunner, allowed_types: frozenset[str],
                  hint: str, parent: QWidget | None = None) -> None:
@@ -132,7 +133,7 @@ class HierarchyPanel(QWidget):
         row.addWidget(self.search, 1)
         pin_button = QPushButton("핀 고정")
         pin_button.setToolTip(
-            "고른 경로를 핀으로 저장합니다.\n"
+            "고른 경로를 현재 Wwise 프로젝트의 핀으로 저장합니다.\n"
             "핀을 걸면 그 하위만 보여서 큰 프로젝트에서\n"
             "자기 작업 영역만 볼 수 있습니다.")
         pin_button.clicked.connect(self._add_pin)
@@ -147,7 +148,7 @@ class HierarchyPanel(QWidget):
 
         self.pin_box = QComboBox()
         self.pin_box.addItem("핀 없음 (전체 보기)", "")
-        self.pin_box.setToolTip("저장해 둔 핀 중에서 골라 그 하위만 봅니다.")
+        self.pin_box.setToolTip("현재 Wwise 프로젝트에 저장한 핀 중에서 고릅니다.")
         self.pin_box.currentIndexChanged.connect(self._apply_pin)
         layout.addWidget(self.pin_box)
 
@@ -172,9 +173,19 @@ class HierarchyPanel(QWidget):
         return [self.pin_box.itemData(i) for i in range(1, self.pin_box.count())]
 
     def set_pins(self, pins: list[str]) -> None:
-        for pin in pins:
-            if pin and self.pin_box.findData(pin) < 0:
-                self.pin_box.addItem(self._short(pin), pin)
+        """프로젝트 전환 중 이전 연결로 조회하지 않고 목록만 교체한다."""
+        blocked = self.pin_box.blockSignals(True)
+        try:
+            self.pin_box.clear()
+            self.pin_box.addItem("핀 없음 (전체 보기)", "")
+            for pin in pins:
+                if pin and self.pin_box.findData(pin) < 0:
+                    self.pin_box.addItem(self._short(pin), pin)
+            self.pin_box.setCurrentIndex(0)
+        finally:
+            self.pin_box.blockSignals(blocked)
+        self.unpin_button.setEnabled(False)
+        self.search.clear()
 
     def set_source(self, bridge: WwiseBridge | None, root: str) -> None:
         """Wwise 에 붙었을 때(또는 끊겼을 때) 알려 준다."""
@@ -380,13 +391,23 @@ class HierarchyPanel(QWidget):
             return
         if self.pin_box.findData(path) < 0:
             self.pin_box.addItem(self._short(path), path)
+            self.pins_changed.emit()
         self.pin_box.setCurrentIndex(self.pin_box.findData(path))
 
     def _remove_current_pin(self) -> None:
-        index = self.pin_box.currentIndex()
-        if index > 0:
-            self.pin_box.removeItem(index)   # 인덱스 0(핀 없음)으로 돌아가며 reload
-        self.pin_box.setCurrentIndex(0)
+        self._remove_pin(self.pin_box.currentData())
+
+    def _remove_pin(self, path: str) -> None:
+        index = self.pin_box.findData(path)
+        if index <= 0:
+            return
+        active = self.pin_box.currentData()
+        self.set_pins([pin for pin in self.pins if pin != path])
+        if active and active != path:
+            self.pin_box.setCurrentIndex(self.pin_box.findData(active))
+        else:
+            self.reload()
+        self.pins_changed.emit()
 
     def _apply_pin(self) -> None:
         self.unpin_button.setEnabled(bool(self.pin_box.currentData()))
@@ -406,7 +427,7 @@ class HierarchyPanel(QWidget):
         if path and self.pin_box.findData(path) > 0:
             unpin = QAction("이 경로를 핀에서 제거", self)
             unpin.triggered.connect(
-                lambda: self.pin_box.removeItem(self.pin_box.findData(path)))
+                lambda: self._remove_pin(path))
             menu.addAction(unpin)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
@@ -435,6 +456,7 @@ class MainWindow(QMainWindow):
         self._suggestion: str | None = None
         self._adopted_selection = False
         self._last_project_path = None
+        self._pin_project_key: str | None = None
         self._destination_revision = 0
         self._destination_loading = False
         self._importing = False
@@ -449,6 +471,8 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         self._build_ui()
+        self.audio_panel.pins_changed.connect(self._save_project_pins)
+        self.event_panel.pins_changed.connect(self._save_project_pins)
 
         # 타이머를 설정 복원보다 먼저 만든다. 복원이 체크박스를 건드리면
         # stateChanged 가 곧바로 _queue_replan 을 부르기 때문이다.
@@ -655,9 +679,15 @@ class MainWindow(QMainWindow):
 
     def _on_wwise_connected(self, project: ProjectInfo) -> None:
         """Wwise 에 붙었다(또는 프로젝트가 바뀌었다). 화면을 거기에 맞춘다."""
+        self._save_project_pins()
+        project_key = self.settings.project_key(project.path)
+        self._pin_project_key = project_key
+        audio_pins, event_pins = self.settings.pins_for_project(project.path)
+        self.audio_panel.set_pins(audio_pins)
+        self.event_panel.set_pins(event_pins)
         changed_project = (self._last_project_path is not None
-                           and self._last_project_path != project.path)
-        self._last_project_path = project.path
+                           and self._last_project_path != project_key)
+        self._last_project_path = project_key
         if changed_project:
             self.settings.last_destination = ""
             self.settings.last_event_root = ""
@@ -668,10 +698,6 @@ class MainWindow(QMainWindow):
                 group.switch_levels.clear()
                 for source in group.files:
                     source.switches.clear()
-            for panel in (self.audio_panel, self.event_panel):
-                panel.pin_box.blockSignals(True)
-                panel.pin_box.setCurrentIndex(0)
-                panel.pin_box.blockSignals(False)
             self._fill_group_tree()
         self._switch_lookup = {}
         self._destination_revision += 1
@@ -781,6 +807,10 @@ class MainWindow(QMainWindow):
 
     def _on_wwise_lost(self, reason: str) -> None:
         """Wwise 가 사라졌다. 가져온 파일과 묶음은 그대로 두고 임포트만 막는다."""
+        self._save_project_pins()
+        self._pin_project_key = None
+        self.audio_panel.set_pins([])
+        self.event_panel.set_pins([])
         self.project = None
         self._destination_revision += 1
         self._destination_timer.stop()
@@ -1008,11 +1038,15 @@ class MainWindow(QMainWindow):
         self.suggest_check.setChecked(s.suggest_paths)
         self.smart_wav_check.setChecked(
             s.originals_mode != options_dialog.MODE_MANUAL)
-        self.audio_panel.set_pins(s.pins)
-        self.event_panel.set_pins(s.event_pins)
+        # 핀은 연결된 프로젝트를 확인한 뒤 그 프로젝트의 목록만 불러온다.
         # 트리 내용은 여기서 읽지 않는다. Wwise 에 붙은 뒤
         # _on_wwise_connected 가 지난번 위치까지 펼쳐 준다.
         self._update_paths()
+
+    def _save_project_pins(self) -> None:
+        if self._pin_project_key is not None and self.settings.store_project_pins(
+                self._pin_project_key, self.audio_panel.pins, self.event_panel.pins):
+            self.settings.save()
 
     def _persist(self) -> None:
         s = self.settings
@@ -1020,8 +1054,7 @@ class MainWindow(QMainWindow):
         s.suggest_paths = self.suggest_check.isChecked()
         s.last_event_root = self.event_root
         s.last_destination = self.destination
-        s.pins = self.audio_panel.pins
-        s.event_pins = self.event_panel.pins
+        self._save_project_pins()
         s.save()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt 이름

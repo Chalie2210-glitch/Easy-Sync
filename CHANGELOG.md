@@ -1,5 +1,6 @@
 # Unreleased
 
+- Store audio and event pins per Wwise project path, save edits immediately, and restore each project's list on reconnect. Legacy shared pins remain in settings without being applied automatically.
 - Recover when Wwise closes and another project opens, even with stalled background work.
 - Clear the previous project's destinations, active pins, event checks and switch assignments on project change.
 - Automatic events require explicit opt-in on each launch; the setting is no longer saved.

@@ -27,10 +27,11 @@ SETTINGS_PATH = APP_DIR / "settings.json"
 class Settings:
     """창을 다시 열었을 때 이어서 작업할 수 있게 하는 값들."""
 
-    #: 작업자별 관심 경로. 오디오 트리를 이 하위로만 좁혀 보여준다.
+    #: 이전 버전의 공용 핀. 소속 프로젝트를 알 수 없어 보관만 한다.
     pins: list[str] = field(default_factory=list)
-    #: 이벤트 트리의 핀.
     event_pins: list[str] = field(default_factory=list)
+    #: 정규화한 .wproj 전체 경로별 오디오/이벤트 핀.
+    project_pins: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     #: 마지막으로 임포트한 목적지.
     last_destination: str = ""
     #: 마지막 이벤트 경로.
@@ -62,6 +63,24 @@ class Settings:
     window_geometry: str = ""
     defaults_version: int = 1
 
+    @staticmethod
+    def project_key(path: Path | str) -> str:
+        return os.path.normcase(os.path.abspath(path))
+
+    def pins_for_project(self, path: Path | str) -> tuple[list[str], list[str]]:
+        """반환 목록을 편집해도 다른 프로젝트의 저장값은 바뀌지 않는다."""
+        saved = self.project_pins.get(self.project_key(path), {})
+        return list(saved.get("audio", [])), list(saved.get("events", []))
+
+    def store_project_pins(self, path: Path | str,
+                           audio: list[str], events: list[str]) -> bool:
+        key = self.project_key(path)
+        value = {"audio": list(audio), "events": list(events)}
+        if self.project_pins.get(key, {"audio": [], "events": []}) == value:
+            return False
+        self.project_pins[key] = value
+        return True
+
     @classmethod
     def load(cls) -> "Settings":
         """설정을 읽는다. 없거나 깨졌으면 기본값을 돌려준다.
@@ -76,6 +95,21 @@ class Settings:
         except (OSError, json.JSONDecodeError) as exc:
             log.warning("설정을 읽지 못해 기본값을 씁니다: %s", exc)
             return cls()
+        if not isinstance(raw, dict):
+            return cls()
+        projects = raw.get("project_pins", {})
+        raw["project_pins"] = {}
+        if isinstance(projects, dict):
+            for path, buckets in projects.items():
+                if not path or not isinstance(buckets, dict):
+                    continue
+                cleaned = {}
+                for kind in ("audio", "events"):
+                    values = buckets.get(kind, [])
+                    cleaned[kind] = list(dict.fromkeys(
+                        p for p in values if isinstance(p, str) and p
+                    )) if isinstance(values, list) else []
+                raw["project_pins"][cls.project_key(path)] = cleaned
         if raw.get("defaults_version", 0) < 1:
             raw.update(default_container="Random Container", suggest_paths=False,
                        defaults_version=1)
