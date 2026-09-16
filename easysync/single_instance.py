@@ -9,16 +9,10 @@
 그래서 첫 번째 프로세스가 로컬 포트를 잡아 "주인" 이 되고, 나머지는 자기
 파일 경로만 주인에게 넘기고 끝난다.
 
-**가장 중요한 규칙: 모으기에 실패해도 실행은 되어야 한다.**
-
-실제로 겪은 사고가 그것이다. 시작 도중 멈춘 프로세스가 창도 없이 포트만
-쥐고 있었고, 그 뒤로 우클릭을 아무리 눌러도 새 프로세스가 "이미 떠 있네"
-하고 조용히 종료했다. 사용자 눈에는 프로그램이 그냥 안 켜지는 것으로 보였고,
-로그를 보기 전에는 원인을 알 수 없었다.
-
-그래서 지금은 넘기기가 **응답(ack)** 을 요구한다. 주인은 창이 실제로 뜬
-뒤에만 응답한다. 응답이 없으면 그쪽은 죽었거나 멈춘 것으로 보고, 넘기려던
-프로세스가 자기 창을 연다. 창이 두 개 뜨는 쪽이 하나도 안 뜨는 것보다 낫다.
+넘기기는 창이 실제로 준비된 뒤 보내는 응답(ack)을 요구한다. 시작이 늦거나
+응답이 유실되어도 포트의 주인이 살아 있으면 두 번째 창을 열지 않는다.
+전달 실패는 알리고, 기존 프로세스가 종료되어 포트를 다시 확보했을 때만
+새 창을 연다. 전달은 한 번만 시도해 응답 유실 시 중복 수신도 막는다.
 
 127.0.0.1 에만 바인딩한다. 바깥에서 접속할 수 없고, 받는 것은 이 PC 의
 파일 경로뿐이다.
@@ -41,18 +35,42 @@ ENCODING = "utf-8"
 #: 주인이 "받았다" 고 보내는 응답. 이게 와야 넘기기가 성공한 것이다.
 ACK = b"EASYSYNC-OK\n"
 
-#: 넘긴 쪽이 응답을 기다리는 시간(초).
-#: 양쪽으로 틀릴 수 있는 값이라 실제 시작 시간을 재고 잡았다. 창이 뜨기까지
-#: 보통 2초 안팎이므로 그 두 배 남짓.
-#:   너무 짧으면 — 정상적으로 시작 중인 주인을 죽은 것으로 보고 형제들이
-#:                제각기 창을 연다.
-#:   너무 길면   — 주인이 정말 멈췄을 때 사용자가 그만큼 빈 화면을 본다.
-ACK_TIMEOUT = 6.0
+#: Cold starts can take longer under disk/antivirus load. A timeout is not
+#: permission to open another window while the listening socket is still owned.
+ACK_TIMEOUT = 30.0
 
-#: 주인이 "창 떴다" 신호를 기다리는 시간(초). 이 안에 안 뜨면 응답하지 않아
-#: 넘기려던 쪽이 자기 창을 열게 한다. ACK_TIMEOUT 보다 짧아야 상대가
-#: 기다리다 끊기 전에 결론이 난다.
-READY_TIMEOUT = 5.0
+#: 주인이 "창 떴다" 신호를 기다리는 시간(초). 이 안에 안 뜨면 전달 실패를
+#: 알린다. ACK_TIMEOUT 보다 짧아야 상대가 끊기 전에 결론이 난다.
+READY_TIMEOUT = 25.0
+
+
+class InstanceUnavailable(Exception):
+    """기존 인스턴스가 포트를 보유하지만 전달을 확인할 수 없다."""
+
+
+def acquire(files: list[Path]) -> socket.socket | None:
+    """Return the exclusive owner socket, or None after confirmed delivery."""
+    server = claim()
+    if server is not None:
+        return server
+    if forward(files):
+        return None
+    # The owner may have exited during startup/delivery. Only a successful
+    # exclusive bind lets this process become a replacement owner.
+    server = claim()
+    if server is not None:
+        return server
+    raise InstanceUnavailable(
+        "이미 실행 중인 Easy Sync에 파일을 전달했는지 확인하지 못했습니다.\n"
+        "기존 창의 파일 목록을 확인해주세요. 창이 응답하지 않으면 작업 상태를 확인한 뒤\n"
+        "Easy Sync를 종료하고 다시 실행해주세요. 중복 창은 열지 않았습니다.")
+
+
+def report_unavailable(exc: InstanceUnavailable) -> None:
+    """Qt를 불러오거나 또 다른 메인 창을 만들지 않고 실패를 알린다."""
+    log.warning("%s", exc)
+    import ctypes
+    ctypes.windll.user32.MessageBoxW(None, str(exc), "Easy Sync", 0x30)
 
 
 def claim() -> socket.socket | None:
@@ -61,8 +79,10 @@ def claim() -> socket.socket | None:
     try:
         # SO_REUSEADDR 를 켜지 않는다. 켜면 이미 듣고 있는 인스턴스가 있어도
         # 바인딩이 성공해 버려서 창이 두 개 뜬다.
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         server.bind((HOST, PORT))
-        server.listen(16)
+        server.listen(socket.SOMAXCONN)
         return server
     except OSError:
         server.close()
@@ -72,8 +92,8 @@ def claim() -> socket.socket | None:
 def forward(files: list[Path]) -> bool:
     """이미 떠 있는 창에 파일 경로를 넘긴다. 응답을 받으면 True.
 
-    False 면 저쪽이 죽었거나 멈춘 것이다. 부른 쪽은 종료하지 말고 자기 창을
-    열어야 한다.
+    False 는 전달 여부를 확인할 수 없다는 뜻이다. 이것만으로 기존 창이
+    죽었다고 판단하거나 별도 창을 열면 안 된다.
     """
     payload = "\n".join(str(f) for f in files) or "\n"
     try:
@@ -127,8 +147,7 @@ def serve(server: socket.socket, on_files: Callable[[list[Path]], None],
             if not ready.wait(READY_TIMEOUT):
                 log.warning("창이 준비되지 않아 %d개를 받지 못했습니다", len(paths))
                 return
-            if paths:
-                on_files(paths)
+            on_files(paths)  # Empty launch also activates the existing window.
             try:
                 conn.sendall(ACK)
             except OSError:

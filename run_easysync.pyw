@@ -44,8 +44,12 @@ def launch(argv=None):
     # per selected file; only the owner needs the expensive GUI imports.
     if not any(arg.startswith("-") for arg in args):
         from easysync import single_instance
-        server = single_instance.claim()
-        if server is None and single_instance.forward([Path(p).absolute() for p in args]):
+        try:
+            server = single_instance.acquire([Path(p).absolute() for p in args])
+        except single_instance.InstanceUnavailable as exc:
+            single_instance.report_unavailable(exc)
+            return 2
+        if server is None:
             return 0
         try:
             from easysync.app import main

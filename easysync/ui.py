@@ -1211,6 +1211,8 @@ class MainWindow(QMainWindow):
         log.info("탐색기에서 경로 %d개 수신", len(paths))
         self.tasks.run(_collect_files, [str(p) for p in paths], on_done=self.add_files,
                        on_fail=self._on_task_failed)
+        if self.isMinimized():
+            self.showNormal()
         self.raise_()
         self.activateWindow()
 

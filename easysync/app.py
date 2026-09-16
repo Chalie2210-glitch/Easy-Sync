@@ -176,16 +176,16 @@ def main(argv: list[str] | None = None, *, preclaimed_server=_UNCLAIMED) -> int:
     files = [Path(p).absolute() for p in args.files]
 
     # 탐색기는 고른 파일 개수만큼 이 프로그램을 띄운다. 창 하나로 모은다.
-    # 넘기기가 실패하면 종료하지 않고 내 창을 연다 — 모으기에 실패하는 것과
-    # 아예 안 켜지는 것은 전혀 다른 문제다. 자세한 이유는 single_instance
-    # 모듈 주석 참고.
-    server = (single_instance.claim() if preclaimed_server is _UNCLAIMED
-              else preclaimed_server)
+    # Forwarding timeout never permits a second window while the owner lives.
+    try:
+        server = (single_instance.acquire(files) if preclaimed_server is _UNCLAIMED
+                  else preclaimed_server)
+    except single_instance.InstanceUnavailable as exc:
+        single_instance.report_unavailable(exc)
+        return 2
     if server is None:
-        if preclaimed_server is _UNCLAIMED and single_instance.forward(files):
-            log.info("이미 떠 있는 창에 파일 %d개를 넘기고 종료", len(files))
-            return 0
-        log.warning("포트는 잡혀 있으나 응답이 없습니다. 창을 따로 엽니다.")
+        log.info("이미 떠 있는 창에 파일 %d개를 넘기고 종료", len(files))
+        return 0
 
     app = QApplication(sys.argv[:1])
     # An installer must wait until the application has finished all imports.
@@ -244,3 +244,5 @@ def main(argv: list[str] | None = None, *, preclaimed_server=_UNCLAIMED) -> int:
         return 2
     finally:
         link.stop()
+        if server is not None:
+            server.close()
