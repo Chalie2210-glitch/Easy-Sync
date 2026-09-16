@@ -10,6 +10,7 @@ if (-not $Iscc) {
 }
 if (-not $Iscc) { throw 'Install Inno Setup 6 or pass -Iscc with the ISCC.exe path.' }
 $Python = (Get-Command $Python -ErrorAction Stop).Source
+& (Join-Path $PSScriptRoot 'build-shell.ps1')
 # Prevent unrelated tools on PATH (e.g. Poppler's ICU) from replacing Windows DLLs.
 $env:PATH = "$(Split-Path -Parent $Python);$env:SystemRoot\System32;$env:SystemRoot"
 $version = & $Python -c 'from easysync.version import VERSION; print(VERSION)'
@@ -18,6 +19,8 @@ if ($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+$') { throw 'Inval
 if ($LASTEXITCODE -ne 0) { throw 'License collection failed' }
 & $Python -m PyInstaller --noconfirm --clean packaging/EasySync.spec
 if ($LASTEXITCODE -ne 0) { throw 'Application build failed' }
+& $Python packaging/validate_bundle.py
+if ($LASTEXITCODE -ne 0) { throw 'Portable bundle validation failed' }
 & $Iscc "/DAppVersion=$version" packaging/installer.iss
 if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
 $asset = Get-Item -LiteralPath "dist\release\Easy-Sync-Setup-$version-x64.exe"

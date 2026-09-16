@@ -5,12 +5,34 @@ from pathlib import Path
 from . import addon, shellmenu
 
 
+def run_cli(kind: str) -> int:
+    """Installer-friendly status: no blocking Python traceback dialog."""
+    import os
+    import traceback
+    if kind not in {"shell", "wwise"}:
+        return 2
+    report = {"kind": kind, "ok": False}
+    try:
+        install(kind)
+        report["ok"] = True
+    except Exception:
+        report["error"] = traceback.format_exc()
+    try:
+        folder = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "EasySync" / "Logs"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"integration-{kind}.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass  # An unwritable diagnostic folder must not hide the exit status.
+    return 0 if report["ok"] else 2
+
+
 def install(kind: str) -> None:
     if kind == "wwise":
         addon.install()
         addon.reload_addons()
     elif kind == "shell":
-        if len(shellmenu.install()) != len(shellmenu.EXTENSIONS) + 1:
+        if len(shellmenu.install()) != len(list(shellmenu._registration_bases())):
             raise RuntimeError("일부 탐색기 메뉴를 등록하지 못했습니다.")
         if shellmenu.install_sendto() is None:
             raise RuntimeError("보내기 바로가기를 만들지 못했습니다.")

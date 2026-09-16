@@ -14,8 +14,9 @@ AppUpdatesURL=https://github.com/Chalie2210-glitch/Easy-Sync/releases/latest
 DefaultDirName={localappdata}\Programs\Easy Sync
 DefaultGroupName=Easy Sync
 PrivilegesRequired=lowest
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+; An x64 in-process shell module requires native x64 Explorer (not ARM64).
+ArchitecturesAllowed=x64os
+ArchitecturesInstallIn64BitMode=x64os
 MinVersion=10.0
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
@@ -38,11 +39,14 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"
-Name: "shellmenu"; Description: "Register Explorer audio/folder and Send to menus"
+Name: "shellmenu"; Description: "Register Explorer menus (Windows 11: Show more options)"
 Name: "wwisemenu"; Description: "Register Wwise Easy Sync menus"
 
 [Files]
-Source: "..\dist\EasySync\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\EasySync\*"; DestDir: "{app}"; Excludes: "_internal\EasySyncShell-*.dll"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Content-addressed DLL names let upgrades install without replacing a module
+; loaded by Explorer. Identical modules are retained; uninstall can defer removal.
+Source: "..\dist\EasySync\_internal\EasySyncShell-*.dll"; DestDir: "{app}\_internal"; Flags: onlyifdoesntexist uninsrestartdelete
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\ThirdPartyLicenses\*"; DestDir: "{app}\ThirdPartyLicenses"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -52,11 +56,42 @@ Name: "{group}\Easy Sync"; Filename: "{app}\EasySync.exe"; WorkingDir: "{app}"
 Name: "{autodesktop}\Easy Sync"; Filename: "{app}\EasySync.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\EasySync.exe"; Parameters: "--register-integration shell"; Flags: runhidden waituntilterminated; Tasks: shellmenu
-Filename: "{app}\EasySync.exe"; Parameters: "--register-integration wwise"; Flags: runhidden waituntilterminated; Tasks: wwisemenu
 Filename: "{app}\EasySync.exe"; Description: "Launch Easy Sync"; Flags: nowait postinstall skipifsilent unchecked
 
 [UninstallRun]
 Filename: "{app}\EasySync.exe"; Parameters: "--unregister-integration"; Flags: runhidden waituntilterminated; RunOnceId: "UnregisterEasySync"
 
 ; Settings in APPDATA and logs in LOCALAPPDATA are intentionally retained.
+
+[Code]
+var
+  IntegrationFailed: Boolean;
+
+procedure RegisterIntegration(const Kind: String);
+var
+  ResultCode: Integer;
+begin
+  if not Exec(ExpandConstant('{app}\EasySync.exe'), '--register-integration ' + Kind,
+              ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    IntegrationFailed := True
+  else if ResultCode <> 0 then
+    IntegrationFailed := True;
+  Log(Format('Easy Sync %s integration exit status: %d', [Kind, ResultCode]));
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then begin
+    if WizardIsTaskSelected('shellmenu') then RegisterIntegration('shell');
+    if WizardIsTaskSelected('wwisemenu') then RegisterIntegration('wwise');
+    if IntegrationFailed then
+      SuppressibleMsgBox('Easy Sync menu registration failed. Open Easy Sync > Options and register the menu again.' + #13#10 +
+        'Details: %LOCALAPPDATA%\EasySync\Logs\integration-*.json', mbError, MB_OK, IDOK);
+  end;
+end;
+
+function GetCustomSetupExitCode: Integer;
+begin
+  Result := 0;
+  if IntegrationFailed then Result := 20;
+end;

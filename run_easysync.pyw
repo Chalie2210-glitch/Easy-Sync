@@ -11,15 +11,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 def launch(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
+    if args[:1] == ["--shell-selection"] and len(args) == 2:
+        from easysync.shell_selection import consume
+        try:
+            args = consume(args[1])
+        except (OSError, ValueError) as exc:
+            from easysync.single_instance import InstanceUnavailable, report_unavailable
+            report_unavailable(InstanceUnavailable(f"탐색기 파일 목록을 읽지 못했습니다.\n{exc}"))
+            return 2
     if args == ["--version"]:
         from easysync.version import VERSION
         if sys.stdout is not None:
             print(VERSION)
         return 0
     if args[:1] == ["--register-integration"] and len(args) == 2:
-        from easysync.integration import install
-        install(args[1])
-        return 0
+        from easysync.integration import run_cli
+        return run_cli(args[1])
     if args == ["--unregister-integration"]:
         from easysync.integration import uninstall
         uninstall()

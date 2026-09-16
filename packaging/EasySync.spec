@@ -2,11 +2,15 @@
 from pathlib import Path
 
 root = Path(SPECPATH).parent
+shell_dir = root / 'build' / 'shell'
+shell_name = (shell_dir / 'easysync-shell-host.txt').read_text(encoding='ascii').strip()
 a = Analysis(
     [str(root / 'run_easysync.pyw')],
     pathex=[str(root)],
     binaries=[],
     datas=[(str(root / 'LICENSE'), '.'),
+           (str(shell_dir / shell_name), '.'),
+           (str(shell_dir / 'easysync-shell-host.txt'), '.'),
            (str(root / 'THIRD_PARTY_NOTICES.md'), '.'),
            (str(root / 'build' / 'ThirdPartyLicenses'), 'ThirdPartyLicenses')],
     hiddenimports=['waapi'],

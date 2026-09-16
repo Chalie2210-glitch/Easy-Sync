@@ -46,6 +46,40 @@ jobs:
           if (-not $app.WaitForExit(30000)) { Stop-Process -Id $app.Id; throw 'Application startup timed out' }
           $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
           if ($app.ExitCode -ne 0 -or -not $result.visible) { throw ($result | ConvertTo-Json) }
+      - name: Verify installed Explorer integration and repair
+        shell: pwsh
+        run: |
+          $version = python -c 'from easysync.version import VERSION; print(VERSION)'
+          $installer = Join-Path $PWD "dist/release/Easy-Sync-Setup-$version-x64.exe"
+          $installDir = Join-Path $env:RUNNER_TEMP 'Easy Sync 한글 설치'
+          $env:APPDATA = Join-Path $env:RUNNER_TEMP 'EasySync-Roaming'
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'EasySync-Local'
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          $moduleHandle = [IntPtr]::Zero
+          try {
+            foreach ($attempt in 1..2) {
+              $setup = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOICONS', '/TASKS=shellmenu', "/DIR=`"$installDir`"") -WindowStyle Hidden -PassThru
+              if (-not $setup.WaitForExit(120000)) { throw 'Installer timed out' }
+              if ($setup.ExitCode -ne 0) { throw "Installer failed: $($setup.ExitCode)" }
+              $report = Get-Content -LiteralPath "$env:LOCALAPPDATA/EasySync/Logs/integration-shell.json" -Raw | ConvertFrom-Json
+              if (-not $report.ok) { throw ($report | ConvertTo-Json) }
+              $config = Get-ItemProperty 'HKCU:\Software\EasySync\ShellImport'
+              if ($config.Program -ne "$installDir\EasySync.exe" -or $config.Script -ne '') { throw 'Menu still references a development launcher' }
+              if ($attempt -eq 1) {
+                $moduleName = (Get-Content -LiteralPath "$installDir/_internal/easysync-shell-host.txt" -Raw).Trim()
+                $moduleHandle = [System.Runtime.InteropServices.NativeLibrary]::Load("$installDir/_internal/$moduleName")
+              }
+            }
+          } finally {
+            if ($moduleHandle -ne [IntPtr]::Zero) { [System.Runtime.InteropServices.NativeLibrary]::Free($moduleHandle) }
+            $uninstaller = Join-Path $installDir 'unins000.exe'
+            if (Test-Path -LiteralPath $uninstaller) {
+              $remove = Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -WindowStyle Hidden -PassThru
+              if (-not $remove.WaitForExit(60000) -or $remove.ExitCode -ne 0) { throw 'Uninstall failed' }
+            }
+          }
+          if (Test-Path -LiteralPath "$installDir/EasySync.exe") { throw 'Uninstall left the application behind' }
+          if (Test-Path 'HKCU:\Software\EasySync\ShellImport') { throw 'Uninstall left shell registration behind' }
       - uses: actions/upload-artifact@v4
         with:
           name: Easy-Sync-Windows-x64

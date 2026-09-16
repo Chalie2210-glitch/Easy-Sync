@@ -647,15 +647,16 @@ class MainWindow(QMainWindow):
 
     def _install_shell_menu(self) -> None:
         from . import shellmenu
-        done = shellmenu.install()
-        if done:
+        try:
+            from .integration import install
+            install("shell")
             QMessageBox.information(
                 self, "Easy Sync",
-                "탐색기 우클릭 메뉴에 등록했습니다.\n"
-                + ", ".join(done)
-                + f"\n\n오디오 파일을 우클릭하면 '{shellmenu.MENU_LABEL}' 이 보입니다.")
-        else:
-            QMessageBox.critical(self, "Easy Sync", "등록에 실패했습니다.")
+                "탐색기 메뉴를 등록하고 동작을 확인했습니다.\n\n"
+                f"Windows 11: 오디오 선택 → 우클릭 → 추가 옵션 표시 → {shellmenu.MENU_LABEL}\n"
+                "또는 Shift+F10으로 메뉴를 여세요. 보내기 → Easy Sync도 사용할 수 있습니다.")
+        except Exception as exc:
+            QMessageBox.critical(self, "Easy Sync", f"탐색기 메뉴 등록 실패:\n{exc}")
 
     def _build_header(self) -> QWidget:
         box = QFrame()
